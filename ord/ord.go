@@ -97,8 +97,9 @@ type InscriptionTool struct {
 }
 
 const (
-	defaultSequenceNum    = wire.MaxTxInSequenceNum - 10
-	defaultRevealOutValue = int64(500) // 500 sat, ord default 10000
+	defaultSequenceNum = wire.MaxTxInSequenceNum - 10
+	//defaultRevealOutValue = int64(500) // 500 sat, ord default 10000
+	defaultRevealOutValue = int64(1) // 500 sat, ord default 10000
 
 	MaxStandardTxWeight = blockchain.MaxBlockWeight / 10
 )
@@ -114,6 +115,18 @@ func NewInscriptionTool(net *chaincfg.Params, rpcclient *rpcclient.Client, reque
 		revealTxPrevOutputFetcher: txscript.NewMultiPrevOutFetcher(nil),
 	}
 	return tool, tool._initTool(net, request)
+}
+
+func NewTool(net *chaincfg.Params, client btcapi.BTCAPIClient) (*InscriptionTool, error) {
+	tool := &InscriptionTool{
+		net: net,
+		client: &blockchainClient{
+			btcApiClient: client,
+		},
+		commitTxPrevOutputFetcher: txscript.NewMultiPrevOutFetcher(nil),
+		revealTxPrevOutputFetcher: txscript.NewMultiPrevOutFetcher(nil),
+	}
+	return tool, nil
 }
 
 func NewInscriptionToolWithBtcApiClient(net *chaincfg.Params, btcApiClient btcapi.BTCAPIClient, request *InscriptionRequest) (*InscriptionTool, error) {
@@ -183,16 +196,18 @@ func createInscriptionTxCtxData(net *chaincfg.Params, data InscriptionData) (*in
 		// Therefore, we use two OP_DATA_1 to maintain consistency with ord.
 		AddOp(txscript.OP_DATA_1).
 		AddOp(txscript.OP_DATA_1).
-		AddData([]byte(data.ContentType)).
-		AddOp(txscript.OP_0)
+		AddData([]byte(data.ContentType))
 	if data.ParentId != "" {
 		inscriptionBuilder.AddOp(txscript.OP_DATA_3)
-		pidBytes, err := hex.DecodeString(data.ParentId)
+		inscriptionBuilder.AddOp(txscript.OP_DATA_3)
+		_, pidBytes, err := ParseInscriptionHexId(data.ParentId)
 		if err != nil {
 			return nil, err
 		}
 		inscriptionBuilder.AddData(pidBytes)
 	}
+	inscriptionBuilder.AddOp(txscript.OP_0)
+
 	maxChunkSize := 520
 	bodySize := len(data.Body)
 	for i := 0; i < bodySize; i += maxChunkSize {
@@ -246,31 +261,51 @@ func createInscriptionTxCtxData(net *chaincfg.Params, data InscriptionData) (*in
 	}, nil
 }
 
+// 将 in 和 out 添加到 tx 中。
+// tx: 交易，index: 顺序, destination: 接收地址, outValue: 交易金额
+func (tool *InscriptionTool) addTxInAndOutToTx(tx *wire.MsgTx, index int, destination []string, outValue int64) error {
+	in := wire.NewTxIn(&wire.OutPoint{Index: uint32(index)}, nil, nil)
+	in.Sequence = defaultSequenceNum
+	tx.AddTxIn(in)
+	receiver, err := btcutil.DecodeAddress(destination[index], tool.net)
+	if err != nil {
+		return err
+	}
+	scriptPubKey, err := txscript.PayToAddrScript(receiver)
+	if err != nil {
+		return err
+	}
+	out := wire.NewTxOut(outValue, scriptPubKey)
+	tx.AddTxOut(out)
+	return nil
+}
+
 func (tool *InscriptionTool) buildEmptyRevealTx(singleRevealTxOnly bool, destination []string, revealOutValue, feeRate int64) (int64, error) {
 	var revealTx []*wire.MsgTx
 	totalPrevOutput := int64(0)
 	total := len(tool.txCtxDataList)
-	addTxInTxOutIntoRevealTx := func(tx *wire.MsgTx, index int) error {
-		in := wire.NewTxIn(&wire.OutPoint{Index: uint32(index)}, nil, nil)
-		in.Sequence = defaultSequenceNum
-		tx.AddTxIn(in)
-		receiver, err := btcutil.DecodeAddress(destination[index], tool.net)
-		if err != nil {
-			return err
-		}
-		scriptPubKey, err := txscript.PayToAddrScript(receiver)
-		if err != nil {
-			return err
-		}
-		out := wire.NewTxOut(revealOutValue, scriptPubKey)
-		tx.AddTxOut(out)
-		return nil
-	}
+	//addTxInTxOutIntoRevealTx := func(tx *wire.MsgTx, index int) error {
+	//	in := wire.NewTxIn(&wire.OutPoint{Index: uint32(index)}, nil, nil)
+	//	in.Sequence = defaultSequenceNum
+	//	tx.AddTxIn(in)
+	//	receiver, err := btcutil.DecodeAddress(destination[index], tool.net)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	scriptPubKey, err := txscript.PayToAddrScript(receiver)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	out := wire.NewTxOut(revealOutValue, scriptPubKey)
+	//	tx.AddTxOut(out)
+	//	return nil
+	//}
 	if singleRevealTxOnly {
 		revealTx = make([]*wire.MsgTx, 1)
 		tx := wire.NewMsgTx(wire.TxVersion)
 		for i := 0; i < total; i++ {
-			err := addTxInTxOutIntoRevealTx(tx, i)
+			//err := addTxInTxOutIntoRevealTx(tx, i)
+			err := tool.addTxInAndOutToTx(tx, i, destination, revealOutValue)
 			if err != nil {
 				return 0, err
 			}
@@ -295,7 +330,8 @@ func (tool *InscriptionTool) buildEmptyRevealTx(singleRevealTxOnly bool, destina
 		revealTx = make([]*wire.MsgTx, total)
 		for i := 0; i < total; i++ {
 			tx := wire.NewMsgTx(wire.TxVersion)
-			err := addTxInTxOutIntoRevealTx(tx, i)
+			//err := addTxInTxOutIntoRevealTx(tx, i)
+			err := tool.addTxInAndOutToTx(tx, i, destination, revealOutValue)
 			if err != nil {
 				return 0, err
 			}
@@ -352,6 +388,104 @@ func (tool *InscriptionTool) getTxOutByOutPoint(outPoint *wire.OutPoint) (*wire.
 	return txOut, nil
 }
 
+func (tool *InscriptionTool) SpendUXTO(pk string, inputTxids []string, outputAddr string, value, feeRate int64) (*chainhash.Hash, error) {
+	pkBytes, err := hex.DecodeString(pk)
+	if err != nil {
+		log.Fatal(err)
+	}
+	utxoPrivateKey, _ := btcec.PrivKeyFromBytes(pkBytes)
+
+	// 从UTXO 中找到 output
+	commitTxOutPointList := make([]*wire.OutPoint, 0)
+	commitTxPrivateKeyList := make([]*btcec.PrivateKey, 0)
+	for _, txid := range inputTxids {
+		inscriptionTxHash, err := chainhash.NewHashFromStr(txid)
+		if err != nil {
+			return nil, err
+		}
+		commitTxOutPointList = append(commitTxOutPointList, wire.NewOutPoint(inscriptionTxHash, 0))
+		commitTxPrivateKeyList = append(commitTxPrivateKeyList, utxoPrivateKey)
+	}
+
+	totalSenderAmount := btcutil.Amount(0)
+	tx := wire.NewMsgTx(wire.TxVersion)
+	for _, out := range commitTxOutPointList {
+		txOut, err := tool.getTxOutByOutPoint(out)
+		if err != nil {
+			return nil, err
+		}
+		in := wire.NewTxIn(out, nil, nil)
+		in.Sequence = defaultSequenceNum
+		tx.AddTxIn(in)
+		totalSenderAmount += btcutil.Amount(txOut.Value)
+	}
+
+	fee := btcutil.Amount(mempool.GetTxVirtualSize(btcutil.NewTx(tx))) * btcutil.Amount(feeRate)
+	changeAmount := totalSenderAmount - btcutil.Amount(value) - fee
+
+	net := &chaincfg.TestNet3Params
+	address, err := btcutil.DecodeAddress(outputAddr, net)
+	if err != nil {
+		return nil, err
+	}
+	pkScript, err := txscript.PayToAddrScript(address)
+	txout := &wire.TxOut{
+		PkScript: pkScript,
+		Value:    value,
+	}
+	tx.AddTxOut(txout)
+
+	if changeAmount > 0 {
+		senderAddr, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(txscript.ComputeTaprootKeyNoScript(utxoPrivateKey.PubKey())), net)
+		if err != nil {
+			return nil, err
+		}
+		pkScript, err := txscript.PayToAddrScript(senderAddr)
+		// 找零
+		txout = &wire.TxOut{
+			PkScript: pkScript,
+			Value:    int64(changeAmount),
+		}
+		tx.AddTxOut(txout)
+	} else {
+		if changeAmount < 0 {
+			// 重新获取一次
+			feeWithoutChange := btcutil.Amount(mempool.GetTxVirtualSize(btcutil.NewTx(tx))) * btcutil.Amount(feeRate)
+			if totalSenderAmount-btcutil.Amount(value)-feeWithoutChange < 0 {
+				return nil, errors.New("insufficient balance")
+			}
+		}
+	}
+
+	if len(commitTxPrivateKeyList) == 0 {
+		commitSignTransaction, isSignComplete, err := tool.client.rpcClient.SignRawTransactionWithWallet(tx)
+		if err != nil {
+			log.Printf("sign commit tx error, %v", err)
+			return nil, err
+		}
+		if !isSignComplete {
+			return nil, errors.New("sign commit tx error")
+		}
+		tx = commitSignTransaction
+	} else {
+		for i := range tx.TxIn {
+			txOut := tool.commitTxPrevOutputFetcher.FetchPrevOutput(tx.TxIn[i].PreviousOutPoint)
+			witness, err := txscript.TaprootWitnessSignature(tx, txscript.NewTxSigHashes(tx, tool.commitTxPrevOutputFetcher),
+				i, txOut.Value, txOut.PkScript, txscript.SigHashDefault, commitTxPrivateKeyList[i])
+			if err != nil {
+				return nil, err
+			}
+			tx.TxIn[i].Witness = witness
+		}
+	}
+	return tool.sendRawTransaction(tx)
+}
+
+// 创建提交交易。
+//
+// commitTxOutPointList: utxo的outpoint列表
+// totalRevealPrevOutput:
+// commitFeeRate:
 func (tool *InscriptionTool) buildCommitTx(commitTxOutPointList []*wire.OutPoint, totalRevealPrevOutput, commitFeeRate int64) error {
 	totalSenderAmount := btcutil.Amount(0)
 	tx := wire.NewMsgTx(wire.TxVersion)

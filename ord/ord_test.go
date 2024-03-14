@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/stretchr/testify/assert"
+	"hankmo.com/btcdemo/security"
 	"io"
 	"log"
 	"net/http"
@@ -44,7 +45,7 @@ func TestInscribe(t *testing.T) {
 	log.Printf("file contentType %s", contentType)
 
 	// 私钥，后边铭刻需要用来签名
-	utxoPrivateKeyHex := os.Getenv("pk")
+	utxoPrivateKeyHex := security.GetPrivateKey()
 	// 接收铭文的地址
 	destination := os.Getenv("addr")
 
@@ -127,12 +128,12 @@ func TestInscribeChild(t *testing.T) {
 	btcApiClient := mempool.NewClient(net)
 
 	// 父铭文id
-	parentInscriptionId := "ffdaf566807afd75dd1d75a8de04a61f6846fa7169c399e97033a3b89521ab2ei0"
+	//parentInscriptionId := "759289e93a08da9c52510ad3bc0fbc0de6c43d095a2dca4d4e468f452f6067a7i0"
 
 	// 私钥，后边铭刻需要用来签名
-	utxoPrivateKeyHex := os.Getenv("pk")
+	utxoPrivateKeyHex := security.GetPrivateKey()
 	// 接收铭文的地址
-	destination := os.Getenv("addr")
+	destination := "tb1p43pf9mnr26g5446jel8z8jy9ldhxp6rqvm3r6ewg4yrnk6lcsf8qwv3s6m" // os.Getenv("addr")
 
 	// 读取被铭刻的图片文件
 	workingDir, err := os.Getwd()
@@ -184,7 +185,7 @@ func TestInscribeChild(t *testing.T) {
 		FeeRate:                1,                      // 最终铭刻的费率
 		DataList: []InscriptionData{
 			{
-				ParentId:    parentInscriptionId,
+				//ParentId:    parentInscriptionId,
 				ContentType: contentType, // 铭文的content type
 				Body:        fileContent, // 铭文的数据，这里是文件
 				Destination: destination, // 接收铭文的目标地址
@@ -210,6 +211,48 @@ func TestInscribeChild(t *testing.T) {
 		fmt.Println("inscription, " + inscriptions[i])
 	}
 	fmt.Println("fees: ", fees)
+}
+
+func TestTransfer(t *testing.T) {
+	// 创建api client
+	net := &chaincfg.TestNet3Params
+	btcApiClient := mempool.NewClient(net)
+
+	// 私钥
+	senderPrivateKey := ""
+	// 接收地址
+	recvAddr := "tb1pja2cxxa3wmwpmce4jpdmhv3ulxhe9h2nqdglvv69z2c56eljhw9s3mn9tz" // os.Getenv("addr")
+
+	var utxos []string
+	// 选择需要用到的UTXO，而不是全部
+	inscriptionTxid := "759289e93a08da9c52510ad3bc0fbc0de6c43d095a2dca4d4e468f452f6067a7"
+	feeTxid := "ea3a8473cd0c182db6accd64a3035a0ea81388144f4f0c82063bb569ee8aa3b6"
+	utxos = append(utxos, inscriptionTxid)
+	utxos = append(utxos, feeTxid)
+	tool, err := NewTool(net, btcApiClient)
+	txHash, err := tool.SpendUXTO(senderPrivateKey, utxos, recvAddr, 1, 3)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(txHash.String())
+}
+
+func TestQueryUTXO(t *testing.T) {
+
+}
+
+func TestPublicKeyAndPrivateKey(t *testing.T) {
+	addr := os.Getenv("addr")
+	net := &chaincfg.TestNet3Params
+	pk := security.GetPrivateKey()
+	utxoPrivateKeyBytes, err := hex.DecodeString(pk)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, publicKey := btcec.PrivKeyFromBytes(utxoPrivateKeyBytes)
+	utxoTaprootAddress, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(txscript.ComputeTaprootKeyNoScript(publicKey)), net)
+	fmt.Println(utxoTaprootAddress.EncodeAddress())
+	fmt.Println(addr == utxoTaprootAddress.EncodeAddress()) // true
 }
 
 func TestQueryInscription(t *testing.T) {
