@@ -1,8 +1,9 @@
-package main
+package wallet
 
 import (
 	"encoding/hex"
 	"fmt"
+	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -11,7 +12,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 )
 
-func main() {
+func TestAddr(t *testing.T) {
 	// createAndRestoreTaprootAddr()
 
 	pkFromUnisat, addrFromUnisat := "d08df378a0a383c196d3629e9f09b58ea3121fc0abef4363d23bc60529455b9b", "tb1p43pf9mnr26g5446jel8z8jy9ldhxp6rqvm3r6ewg4yrnk6lcsf8qwv3s6m"

@@ -21,9 +21,12 @@ type BTCAPIClient interface {
 	ListUnspent(address btcutil.Address) ([]*UnspentOutput, error)
 }
 
-func Request(method, baseURL, subPath string, requestBody io.Reader) ([]byte, error) {
+func RequestAuth(method, baseURL, subPath, username, password string, requestBody io.Reader) ([]byte, error) {
 	url := fmt.Sprintf("%s%s", baseURL, subPath)
 	req, err := http.NewRequest(method, url, requestBody)
+	if username != "" {
+		req.SetBasicAuth(username, password)
+	}
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create request")
 	}
@@ -39,4 +42,8 @@ func Request(method, baseURL, subPath string, requestBody io.Reader) ([]byte, er
 		return nil, errors.Wrap(err, "failed to read response body")
 	}
 	return body, nil
+}
+
+func Request(method, baseURL, subPath string, requestBody io.Reader) ([]byte, error) {
+	return RequestAuth(method, baseURL, subPath, "", "", requestBody)
 }

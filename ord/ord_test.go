@@ -4,14 +4,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/stretchr/testify/assert"
 	"hankmo.com/btcdemo/security"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"sort"
-	"strconv"
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -122,104 +119,13 @@ func TestInscribe(t *testing.T) {
 	//2024/03/11 23:41:42 fees:  2336
 }
 
-func TestInscribeChild(t *testing.T) {
-	// 创建api client
-	net := &chaincfg.TestNet3Params
-	btcApiClient := mempool.NewClient(net)
-
-	// 父铭文id
-	//parentInscriptionId := "759289e93a08da9c52510ad3bc0fbc0de6c43d095a2dca4d4e468f452f6067a7i0"
-
-	// 私钥，后边铭刻需要用来签名
-	utxoPrivateKeyHex := security.GetPrivateKey()
-	// 接收铭文的地址
-	destination := "tb1p43pf9mnr26g5446jel8z8jy9ldhxp6rqvm3r6ewg4yrnk6lcsf8qwv3s6m" // os.Getenv("addr")
-
-	// 读取被铭刻的图片文件
-	workingDir, err := os.Getwd()
-	if err != nil {
-		log.Fatalf("Error getting current working directory, %v", err)
-	}
-	//file := "1.jpeg"
-	file := "2.jpg"
-	filePath := fmt.Sprintf("%s/%s", workingDir, file)
-	// if file size too max will return sendrawtransaction RPC error: {"code":-26,"message":"tx-size"}
-	fileContent, err := os.ReadFile(filePath)
-	if err != nil {
-		log.Fatalf("Error reading file %v", err)
-	}
-	// 读取文件 content type
-	contentType := http.DetectContentType(fileContent)
-	log.Printf("file contentType %s", contentType)
-
-	// 从私钥生成taproot地址
-	utxoPrivateKeyBytes, err := hex.DecodeString(utxoPrivateKeyHex)
-	if err != nil {
-		log.Fatal(err)
-	}
-	utxoPrivateKey, _ := btcec.PrivKeyFromBytes(utxoPrivateKeyBytes)
-	utxoTaprootAddress, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(txscript.ComputeTaprootKeyNoScript(utxoPrivateKey.PubKey())), net)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 查询地址的UTXO
-	unspentList, err := btcApiClient.ListUnspent(utxoTaprootAddress)
-	if err != nil {
-		log.Fatalf("list unspent err %v", err)
-	}
-
-	// 从UTXO 中找到 output
-	commitTxOutPointList := make([]*wire.OutPoint, 0)
-	commitTxPrivateKeyList := make([]*btcec.PrivateKey, 0)
-	for i := range unspentList {
-		commitTxOutPointList = append(commitTxOutPointList, unspentList[i].Outpoint)
-		commitTxPrivateKeyList = append(commitTxPrivateKeyList, utxoPrivateKey)
-	}
-
-	// 构建铭刻请求
-	request := InscriptionRequest{
-		CommitTxOutPointList:   commitTxOutPointList,   // 预提交花费的output
-		CommitTxPrivateKeyList: commitTxPrivateKeyList, // 预提交时的私钥
-		CommitFeeRate:          2,                      // 预提交费率
-		FeeRate:                1,                      // 最终铭刻的费率
-		DataList: []InscriptionData{
-			{
-				//ParentId:    parentInscriptionId,
-				ContentType: contentType, // 铭文的content type
-				Body:        fileContent, // 铭文的数据，这里是文件
-				Destination: destination, // 接收铭文的目标地址
-			},
-		},
-		SingleRevealTxOnly: false,
-	}
-
-	// 铭刻
-	tool, err := NewInscriptionToolWithBtcApiClient(net, btcApiClient, &request)
-	if err != nil {
-		log.Fatalf("Failed to create inscription tool: %v", err)
-	}
-	commitTxHash, revealTxHashList, inscriptions, fees, err := tool.Inscribe()
-	if err != nil {
-		log.Fatalf("send tx errr, %v", err)
-	}
-	log.Println("commitTxHash, " + commitTxHash.String())
-	for i := range revealTxHashList {
-		fmt.Println("revealTxHash, " + revealTxHashList[i].String())
-	}
-	for i := range inscriptions {
-		fmt.Println("inscription, " + inscriptions[i])
-	}
-	fmt.Println("fees: ", fees)
-}
-
 func TestTransfer(t *testing.T) {
 	// 创建api client
 	net := &chaincfg.TestNet3Params
 	btcApiClient := mempool.NewClient(net)
 
 	// 私钥
-	senderPrivateKey := ""
+	senderPrivateKey := security.GetPrivateKey()
 	// 接收地址
 	recvAddr := "tb1pja2cxxa3wmwpmce4jpdmhv3ulxhe9h2nqdglvv69z2c56eljhw9s3mn9tz" // os.Getenv("addr")
 
@@ -229,7 +135,7 @@ func TestTransfer(t *testing.T) {
 	feeTxid := "ea3a8473cd0c182db6accd64a3035a0ea81388144f4f0c82063bb569ee8aa3b6"
 	utxos = append(utxos, inscriptionTxid)
 	utxos = append(utxos, feeTxid)
-	tool, err := NewTool(net, btcApiClient)
+	tool, err := NewInscriptionToolWithBtcApiClient(net, btcApiClient, nil)
 	txHash, err := tool.SpendUXTO(senderPrivateKey, utxos, recvAddr, 1, 3)
 	if err != nil {
 		log.Fatal(err)
@@ -238,7 +144,22 @@ func TestTransfer(t *testing.T) {
 }
 
 func TestQueryUTXO(t *testing.T) {
-
+	net := &chaincfg.TestNet3Params
+	btcApiClient := mempool.NewClient(net)
+	senderPrivateKey := security.GetPrivateKey()
+	pkBytes, err := hex.DecodeString(senderPrivateKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	utxoPrivateKey, _ := btcec.PrivKeyFromBytes(pkBytes)
+	senderAddr, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(txscript.ComputeTaprootKeyNoScript(utxoPrivateKey.PubKey())), net)
+	utxos, err := btcApiClient.ListUnspent(senderAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, utxo := range utxos {
+		fmt.Println(utxo.Outpoint.String())
+	}
 }
 
 func TestPublicKeyAndPrivateKey(t *testing.T) {
@@ -282,90 +203,4 @@ func TestQueryInscriptionFromUnisat(t *testing.T) {
 	}
 	bs, err := io.ReadAll(resp.Body)
 	fmt.Println(string(bs))
-}
-
-func TestName(t *testing.T) {
-	height := 834325
-	// 每210_000个区块奖励减半，所以可以直接查询处指定区块高度当前的奖励
-	var d = (50 * 100_000_000) >> (height / 210_000)
-	fmt.Println(d)
-}
-
-func TestIntToBytes(t *testing.T) {
-	a := 255
-	fmt.Println(intToBytesLE(int32(a)))
-	fmt.Println(strconv.FormatInt(int64(a), 16))
-	a = 256
-	fmt.Println(intToBytesLE(int32(a)))
-	fmt.Println(strconv.FormatInt(int64(a), 16))
-	a = 257
-	fmt.Println(intToBytesLE(int32(a)))
-	fmt.Println(strconv.FormatInt(int64(a), 16))
-	// [255 0 0 0]
-	// ff
-	// [0 1 0 0]
-	// 100
-	// [1 1 0 0]
-	// 101
-}
-
-func TestParseInscriptionHexId(t *testing.T) {
-	s := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fi0"
-	txid, bs, err := ParseInscriptionHexId(s)
-	if err != nil {
-		t.Fatal("test failed: ", err)
-	}
-	assert.Equal(t, txid, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-	assert.Equal(t, hex.EncodeToString(bs), "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100")
-	s = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fi255"
-	txid, bs, err = ParseInscriptionHexId(s)
-	if err != nil {
-		t.Fatal("test failed: ", err)
-	}
-	assert.Equal(t, txid, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-	assert.Equal(t, hex.EncodeToString(bs), "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100ff")
-	s = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fi256"
-	txid, bs, err = ParseInscriptionHexId(s)
-	if err != nil {
-		t.Fatal("test failed: ", err)
-	}
-	assert.Equal(t, txid, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-	assert.Equal(t, hex.EncodeToString(bs), "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201000001")
-}
-
-func TestRevert(t *testing.T) {
-	s := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-	bs, _ := hex.DecodeString(s)
-	size := len(bs)
-	for i := 0; i < len(bs)/2; i++ {
-		bs[i] = bs[i] ^ bs[size-i-1]
-		bs[size-i-1] = bs[i] ^ bs[size-i-1]
-		bs[i] = bs[i] ^ bs[size-i-1]
-	}
-	fmt.Println(bs)
-}
-
-func TestBitTrimRight0(t *testing.T) {
-	//a := 0
-	//a := 255
-	a := 256
-	bs := intToBytesLE(int32(a))
-	fmt.Println(bs)
-	for len(bs) > 0 {
-		if (bs[len(bs)-1] & 0xff) == 0 {
-			bs = bs[:len(bs)-1]
-		} else {
-			break
-		}
-	}
-	fmt.Println(bs)
-	fmt.Println(hex.EncodeToString(bs))
-}
-
-func TestSortSlice(t *testing.T) {
-	bs := []byte{3, 2, 1, 10}
-	sort.Slice(bs, func(i, j int) bool {
-		return i > j
-	})
-	fmt.Println(bs)
 }
